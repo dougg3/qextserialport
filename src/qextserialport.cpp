@@ -111,6 +111,7 @@ void QextSerialPortPrivate::setBaudRate(BaudRateType baudRate, bool update)
 #  endif
         QESP_PORTABILITY_WARNING()<<"QextSerialPort Portability Warning: Windows does not support baudRate:"<<baudRate;
 #endif
+    // fall through
     case BAUD110:
     case BAUD300:
     case BAUD600:
