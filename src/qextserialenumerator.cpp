@@ -61,6 +61,7 @@ QextSerialEnumeratorPrivate::~QextSerialEnumeratorPrivate()
   QString enumName;   ///< Enumerator name.
   int vendorID;       ///< Vendor ID.
   int productID;      ///< Product ID
+  int revision;       ///< Device revision
   \endcode
  */
 
