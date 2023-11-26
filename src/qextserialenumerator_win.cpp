@@ -100,9 +100,19 @@ void QextSerialEnumeratorPrivate::destroy_sys()
 #endif
 }
 
-#ifndef GUID_DEVINTERFACE_COMPORT
-DEFINE_GUID(GUID_DEVINTERFACE_COMPORT, 0x86e0d1e0L, 0x8089, 0x11d0, 0x9c, 0xe4, 0x08, 0x00, 0x3e, 0x30, 0x1f, 0x73);
-#endif
+// see http://msdn.microsoft.com/en-us/library/windows/hardware/ff553426(v=vs.85).aspx
+// for list of GUID classes
+const GUID deviceClassGuids[] =
+{
+    // Ports (COM & LPT ports), Class = Ports
+    {0x4D36E978, 0xE325, 0x11CE, {0xBF, 0xC1, 0x08, 0x00, 0x2B, 0xE1, 0x03, 0x18}},
+    // Modem, Class = Modem
+    {0x4D36E96D, 0xE325, 0x11CE, {0xBF, 0xC1, 0x08, 0x00, 0x2B, 0xE1, 0x03, 0x18}},
+    // Bluetooth Devices, Class = Bluetooth
+    {0xE0CBF06C, 0xCD8B, 0x4647, {0xBB, 0x8A, 0x26, 0x3B, 0x43, 0xF0, 0xF9, 0x74}},
+    // Added by Arne Kristian Jansen, for use with com0com virtual ports (See Issue 54)
+    {0xDF799E12, 0x3C56, 0x421B, {0xB2, 0x98, 0xB6, 0xD3, 0x64, 0x2B, 0xC8, 0x78}}
+};
 
 
 /*!
@@ -183,7 +193,7 @@ static bool getDeviceDetailsInformation(QextPortInfo *portInfo, HDEVINFO devInfo
 */
 static void enumerateDevices(const GUID &guid, QList<QextPortInfo> *infoList)
 {
-    HDEVINFO devInfoSet = ::SetupDiGetClassDevs(&guid, NULL, NULL, DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
+    HDEVINFO devInfoSet = ::SetupDiGetClassDevs(&guid, NULL, NULL, DIGCF_PRESENT);
     if (devInfoSet != INVALID_HANDLE_VALUE) {
         SP_DEVINFO_DATA devInfoData;
         devInfoData.cbSize = sizeof(SP_DEVINFO_DATA);
@@ -191,7 +201,11 @@ static void enumerateDevices(const GUID &guid, QList<QextPortInfo> *infoList)
             QextPortInfo info;
             info.productID = info.vendorID = info.revision = 0;
             getDeviceDetailsInformation(&info, devInfoSet, &devInfoData);
-            infoList->append(info);
+            if (!info.portName.isEmpty() &&
+                !info.portName.startsWith(QLatin1String("LPT"), Qt::CaseInsensitive))
+            {
+                infoList->append(info);
+            }
         }
         ::SetupDiDestroyDeviceInfoList(devInfoSet);
     }
@@ -216,7 +230,9 @@ static bool lessThan(const QextPortInfo &s1, const QextPortInfo &s2)
 QList<QextPortInfo> QextSerialEnumeratorPrivate::getPorts_sys()
 {
     QList<QextPortInfo> ports;
-    enumerateDevices(GUID_DEVINTERFACE_COMPORT, &ports);
+    const int count = sizeof(deviceClassGuids)/sizeof(deviceClassGuids[0]);
+    for (int i=0; i<count; ++i)
+        enumerateDevices(deviceClassGuids[i], &ports);
     std::sort(ports.begin(), ports.end(), lessThan);
     return ports;
 }
@@ -266,7 +282,11 @@ LRESULT QextSerialEnumeratorPrivate::onDeviceChanged(WPARAM wParam, LPARAM lPara
             QString deviceID = QString::fromUtf16(reinterpret_cast<ushort *>(pDevInf->dbcc_name));
             deviceID = deviceID.toUpper().replace(QLatin1String("#"), QLatin1String("\\"));
 
-            matchAndDispatchChangedDevice(deviceID, GUID_DEVINTERFACE_COMPORT, wParam);
+            const int count = sizeof(deviceClassGuids)/sizeof(deviceClassGuids[0]);
+            for (int i=0; i<count; ++i) {
+                if (matchAndDispatchChangedDevice(deviceID, deviceClassGuids[i], wParam))
+                    break;
+            }
         }
     }
     return 0;
@@ -276,8 +296,8 @@ bool QextSerialEnumeratorPrivate::matchAndDispatchChangedDevice(const QString &d
 {
     Q_Q(QextSerialEnumerator);
     bool rv = false;
-    DWORD dwFlag = (DBT_DEVICEARRIVAL == wParam) ? DIGCF_PRESENT : DIGCF_PROFILE;
-    HDEVINFO devInfoSet  = SetupDiGetClassDevs(&guid, NULL, NULL, dwFlag | DIGCF_DEVICEINTERFACE);
+    DWORD dwFlag = (DBT_DEVICEARRIVAL == wParam) ? DIGCF_PRESENT : DIGCF_ALLCLASSES;
+    HDEVINFO devInfoSet  = SetupDiGetClassDevs(&guid, NULL, NULL, dwFlag);
     if (devInfoSet != INVALID_HANDLE_VALUE) {
         SP_DEVINFO_DATA spDevInfoData;
         spDevInfoData.cbSize = sizeof(SP_DEVINFO_DATA);
@@ -290,10 +310,13 @@ bool QextSerialEnumeratorPrivate::matchAndDispatchChangedDevice(const QString &d
                 QextPortInfo info;
                 info.productID = info.vendorID = info.revision = 0;
                 getDeviceDetailsInformation(&info, devInfoSet, &spDevInfoData, wParam);
-                if (wParam == DBT_DEVICEARRIVAL)
-                    Q_EMIT q->deviceDiscovered(info);
-                else if (wParam == DBT_DEVICEREMOVECOMPLETE)
-                    Q_EMIT q->deviceRemoved(info);
+                if (!info.portName.isEmpty())
+                {
+                    if (wParam == DBT_DEVICEARRIVAL)
+                        Q_EMIT q->deviceDiscovered(info);
+                    else if (wParam == DBT_DEVICEREMOVECOMPLETE)
+                        Q_EMIT q->deviceRemoved(info);
+                }
                 break;
             }
         }
